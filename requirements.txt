@@ -1,0 +1,8 @@
+STDIN
+numpy
+pandas
+scikit-learn
+matplotlib
+scipy
+jupyter
+pymoo  # Bibliothèque recommandée pour l'optimisation multi-objectifs
