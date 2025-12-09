@@ -1,33 +1,40 @@
 from src.data_loader import DataLoader
-# Les imports suivants seront utilisés dans les phases 2 et 3
-# from src.cf_model import ItemBasedCF
-# from src.optimizer import MORSOptimizer
+from src.cf_model import ItemBasedCF
 
 def main():
-    print("=== Projet MORS: Long Tail Recommendation (Phase 1) ===")
     
-    # 1. Configuration du chemin
-    # Assurez-vous que le dossier ml-100k est bien dans data/raw/
-    data_path = 'data/raw/ml-100k' 
-    loader = DataLoader(data_path)
-    
-    # 2. Chargement des données
+    # --- PHASE 1: Data Loading ---
+    print("--- Loading Data ---")
+    loader = DataLoader('data/raw/ml-100k')
     df = loader.load_ratings()
     
-    if df is not None:
-        # 3. Séparation Train / Test
-        train_df, test_df = loader.get_train_test_split(df)
-        
-        # 4. Création de la matrice d'entraînement (pour le Filtrage Collaboratif)
-        train_matrix = loader.get_user_item_matrix(train_df)
-        print(f"✅ Matrice d'entraînement créée : {train_matrix.shape} (Users x Items)")
-        
-        # 5. Calcul des statistiques des items (pour l'Optimisation Multi-Objectifs)
-        item_stats = loader.get_item_statistics(train_df)
-        print("\n--- Exemple de statistiques (Top 5 films les plus notés) ---")
-        print(item_stats.sort_values(by='popularity', ascending=False).head())
+    if df is None:
+        return
 
-        print("\n🎉 Phase 1 terminée ! Les données sont prêtes pour le modèle.")
+    train_df, _ = loader.get_train_test_split(df)
+    train_matrix = loader.get_user_item_matrix(train_df)
+    
+    # --- PHASE 2: Collaborative Filtering ---
+    print("\n--- Initializing Collaborative Filtering Model ---")
+    
+    # Instantiate
+    cf = ItemBasedCF(train_matrix)
+    
+    # Train (Compute Similarities)
+    cf.compute_similarity()
+    
+    # Test on a specific user
+    USER_ID = 1
+    K_CANDIDATES = 10
+    
+    candidates = cf.get_top_k_candidates(user_id=USER_ID, k=K_CANDIDATES)
+    
+    print(f"\nTop {K_CANDIDATES} Raw Recommendations for User {USER_ID}:")
+    print("-" * 40)
+    print(f"{'Item ID':<10} | {'Predicted Rating':<15}")
+    print("-" * 40)
+    for film, note in candidates:
+        print(f"{film:<10} | {note:.4f}")
 
 if __name__ == "__main__":
     main()
