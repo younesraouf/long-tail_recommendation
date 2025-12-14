@@ -105,3 +105,20 @@ class DataLoader:
         item_stats.columns = ['popularity', 'mu', 'sigma']
         
         return item_stats
+        
+    def load_movie_titles(self):
+        """
+        Charge le fichier u.item pour associer ID -> Titre.
+        """
+        # u.item est séparé par '|' et peut avoir des problèmes d'encodage (latin-1)
+        item_path = os.path.join(self.data_path, "u.item")
+        print(f"[INFO] Loading movie titles from: {item_path}")
+        try:
+            # On ne charge que les 2 premières colonnes : ID et Titre
+            movies = pd.read_csv(item_path, sep='|', header=None, encoding='latin-1', usecols=[0, 1])
+            movies.columns = ['item_id', 'title']
+            # On transforme en dictionnaire {id: 'Titre'} pour aller vite
+            return movies.set_index('item_id')['title'].to_dict()
+        except Exception as e:
+            print(f"[WARNING] Could not load titles: {e}")
+            return {}
