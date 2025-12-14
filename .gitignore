@@ -22,3 +22,6 @@ data/processed/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# images
+*.png

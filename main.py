@@ -1,74 +1,80 @@
 from src.data_loader import DataLoader
 from src.cf_model import ItemBasedCF
 from src.optimizer import MORSOptimizer
+from src.utils import plot_pareto_front
 
 def main():
-    print("=== MORS Project: Long Tail Recommendation System ===")
+    print("=== MORS Project: Multi-Objective Recommendation System ===")
     
-    # --- PHASE 1: Data Loading ---
-    print("\n[PHASE 1] Loading and Preprocessing Data")
+    # --- PHASE 1: Chargement des données ---
+    print("\n[PHASE 1] Loading Data")
     loader = DataLoader('data/raw/ml-100k')
     df = loader.load_ratings()
     
     if df is None: return
 
+    # On garde le split pour la bonne forme, mais on entraîne sur le Train Set
     train_df, _ = loader.get_train_test_split(df)
     train_matrix = loader.get_user_item_matrix(train_df)
-    # Important: Retrieve item statistics for Phase 3
     item_stats = loader.get_item_statistics(train_df)
     
-    # --- PHASE 2: Collaborative Filtering ---
-    print("\n[PHASE 2] Initializing Collaborative Filtering Model")
+    # --- PHASE 2: Filtrage Collaboratif (Génération du Pool) ---
+    print("\n[PHASE 2] Generating Candidate Pool (CF)")
     cf = ItemBasedCF(train_matrix)
     cf.compute_similarity()
     
     USER_ID = 1
-    # PARAMÈTRE OPTIMISÉ : 300 candidats pour plus de diversité
-    K_POOL_SIZE = 300 
     
-    candidates = cf.get_top_k_candidates(user_id=USER_ID, k=K_POOL_SIZE)
+    # Stratégie "Injection de Chaos" pour garantir la diversité
+    # On prend 800 films, on garde les 150 meilleurs + 150 de la "Long Tail"
+    large_pool = cf.get_top_k_candidates(user_id=USER_ID, k=800)
     
-    print(f"\n[INFO] Generated pool of {len(candidates)} candidates for User {USER_ID}.")
-    print(f"Top 3 candidates (by accuracy): {candidates[:3]}")
+    safe_candidates = large_pool[:150]    # Les "Best-Sellers"
+    risky_candidates = large_pool[-150:]  # La "Long Tail"
+    
+    candidates = safe_candidates + risky_candidates
+    print(f"\n[INFO] Optimization Pool ready: {len(candidates)} items (Mixed Strategy).")
 
-    # --- PHASE 3: Evolutionary Optimization ---
-    print("\n[PHASE 3] Starting Evolutionary Optimization (MORS)")
+    # --- PHASE 3 & 4: Optimisation MORS (Algorithme Génétique) ---
+    print("\n[PHASE 3] Running Evolutionary Algorithm (MORS)...")
     
-    # PARAMÈTRE OPTIMISÉ : mutation_rate = 0.3
     optimizer = MORSOptimizer(
         candidates=candidates, 
         item_stats=item_stats, 
         list_length=10, 
         population_size=50,
-        mutation_rate=0.3 
+        mutation_rate=0.3
     )
     
-    # Run for 50 generations
     pareto_solutions = optimizer.run(generations=50)
+    print(f"\n[Done] Found {len(pareto_solutions)} Pareto-optimal solutions.")
     
-    print(f"\n[Done] Optimization complete. Found {len(pareto_solutions)} unique solutions.")
+    # --- PHASE 5: Visualisation & Résultats ---
+    print("\n[PHASE 5] Results & Visualization")
     
-    # --- Display Results with Titles ---
-    print("\n[RESULTS] Analysis of Recommendations")
+    # 1. Sauvegarder le graphique (C'est la preuve scientifique du papier)
+    plot_pareto_front(pareto_solutions, USER_ID)
     
-    # Chargement des titres pour l'affichage
+    # 2. Afficher les titres pour l'analyse humaine
     titles_map = loader.load_movie_titles()
-
-    def print_solution(solution, label):
-        print(f"\n{label}")
-        print(f"   Metrics: Accuracy={solution['accuracy']:.2f} | Novelty={solution['novelty']:.4f}")
-        print(f"   Movies:")
-        for item_id in solution['items']:
+    
+    def display_solution(sol, label):
+        print(f"\n👉 {label}")
+        print(f"   Optimization Score -> Accuracy (F1): {sol['accuracy']:.2f} | Novelty (F2): {sol['novelty']:.4f}")
+        print(f"   Recommended Movies:")
+        for item_id in sol['items']:
             title = titles_map.get(item_id, "Unknown Title")
+            # On affiche l'ID pour vérifier si c'est un film rare
             print(f"     - [{item_id}] {title}")
 
-    # 1. Solution Max Précision
-    best_acc_sol = max(pareto_solutions, key=lambda x: x['accuracy'])
-    print_solution(best_acc_sol, "Max Accuracy Solution (Safe bets / Blockbusters)")
+    # Afficher les deux extrêmes du Front de Pareto
+    best_acc = max(pareto_solutions, key=lambda x: x['accuracy'])
+    display_solution(best_acc, "Solution: MAX ACCURACY (Conservative)")
     
-    # 2. Solution Max Nouveauté
-    best_nov_sol = max(pareto_solutions, key=lambda x: x['novelty'])
-    print_solution(best_nov_sol, "Max Novelty Solution (Hidden Gems / Long Tail)")
+    best_nov = max(pareto_solutions, key=lambda x: x['novelty'])
+    display_solution(best_nov, "Solution: MAX NOVELTY (Discovery / Long Tail)")
+
+    print("\n✅ Project execution complete. Check 'pareto_front.png'.")
 
 if __name__ == "__main__":
     main()
