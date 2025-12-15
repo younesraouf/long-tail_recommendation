@@ -14,7 +14,6 @@ venv/
 
 # Données (on ne commit pas les gros fichiers)
 data/raw/
-data/processed/
 *.zip
 *.csv
 *.pkl
