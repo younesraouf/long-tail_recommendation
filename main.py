@@ -1,8 +1,12 @@
 import time
+import sys
+import os
+
+# Imports depuis le dossier src
 from src.data_loader import DataLoader
 from src.cf_model import ItemBasedCF
 from src.optimizer import MORSOptimizer
-from src.utils import plot_pareto_front  # On importe votre nouvelle fonction
+from src.utils import plot_pareto_front
 
 def main():
     print("==================================================")
@@ -10,48 +14,35 @@ def main():
     print("==================================================")
 
     # ---------------------------------------------------------
-    # ÉTAPE 1 : Chargement et Préparation des Données
+    # ÉTAPE 1 : Chargement
     # ---------------------------------------------------------
-    # On initialise le loader (par défaut sur MovieLens)
+    # Correction du chemin: "data/processed" car on lance depuis la racine
     loader = DataLoader(processed_data_dir="data/processed", active_dataset='movielens')
     
-    # Affichage du tableau récapitulatif (Table 2 de l'article)
     loader.display_table_2_summary()
-    
-    # Chargement des données réelles
     df = loader.load_active_dataset()
-    titles = loader.load_item_titles() # Pour l'affichage des titres (optionnel)
+    titles = loader.load_item_titles()
     
-    # Split Train/Test (80/20)
+    # Split et Stats
     train_df, _ = loader.get_train_test_split(df)
-    
-    # Calcul des stats (Moyenne/Variance) nécessaire pour le calcul de Nouveauté
     item_stats = loader.get_item_statistics(train_df)
 
     # ---------------------------------------------------------
-    # ÉTAPE 2 : Filtrage Collaboratif (Phase 1)
+    # ÉTAPE 2 : Filtrage Collaboratif
     # ---------------------------------------------------------
-    print("\n[PHASE 1] Entraînement du modèle CF (Item-Based)...")
+    print("\n[PHASE 1] Entraînement du modèle CF...")
     train_matrix = loader.get_user_item_matrix(train_df)
-    
     cf = ItemBasedCF(train_matrix)
     cf.compute_similarity()
     
-    # Choix de l'utilisateur cible (ex: User 1)
     target_user = 1
-    print(f"\n[PHASE 1] Génération du pool de candidats pour User {target_user}...")
-    
-    # On génère 100 candidats potentiels. L'optimiseur devra en choisir 10 parmi eux.
+    print(f"\n[PHASE 1] Génération des candidats pour User {target_user}...")
     candidates = cf.get_top_k_candidates(target_user, k=100)
 
     # ---------------------------------------------------------
-    # ÉTAPE 3 : Optimisation Multi-Objectif (Phase 2)
+    # ÉTAPE 3 : Optimisation (MORS)
     # ---------------------------------------------------------
-    print(f"\n[PHASE 2] Démarrage de l'Optimiseur Évolutionnaire (MORS)...")
-    
-    # Initialisation de l'optimiseur
-    # list_length=10 : On veut recommander 10 films à la fin
-    # population_size=50 : On fait évoluer 50 listes en parallèle
+    print(f"\n[PHASE 2] Démarrage de l'Optimiseur MORS...")
     optimizer = MORSOptimizer(
         candidates=candidates, 
         item_stats=item_stats, 
@@ -60,23 +51,51 @@ def main():
     )
     
     start_time = time.time()
-    # On lance l'évolution sur 100 générations
-    solutions = optimizer.run(generations=100)
+    solutions = optimizer.run(generations=50) 
     elapsed = time.time() - start_time
-    
-    print(f"Optimisation terminée en {elapsed:.2f}s.")
-    print(f"Nombre de solutions Pareto-Optimales trouvées : {len(solutions)}")
+    print(f"Optimisation terminée en {elapsed:.2f}s. ({len(solutions)} solutions)")
 
     # ---------------------------------------------------------
-    # ÉTAPE 4 : Visualisation (Phase 3)
+    # ÉTAPE 4 : Calcul Diversité
+    # ---------------------------------------------------------
+    print("\n[EVALUATION] Calcul de la Diversité...")
+    for sol in solutions:
+        # Appel de la méthode corrigée dans cf_model.py
+        sol['diversity'] = cf.calculate_list_diversity(sol['items'])
+
+    # ---------------------------------------------------------
+    # ÉTAPE 5 : Résultats
+    # ---------------------------------------------------------
+    # Tri par Précision
+    solutions.sort(key=lambda x: x['accuracy'], reverse=True)
+    
+    print("\n--- RÉSULTATS COMPARATIFS ---")
+    
+    if len(solutions) > 0:
+        # Solution A: Précision
+        best_acc = solutions[0]
+        print(f"\n[Solution A : Max Précision]")
+        print(f"   Accuracy : {best_acc['accuracy']:.2f}")
+        print(f"   Novelty  : {best_acc['novelty']:.2f}")
+        print(f"   Diversity: {best_acc['diversity']:.4f}")
+        print(f"   Films: {[titles.get(i, i) for i in best_acc['items'][:3]]} ...")
+
+        # Solution B: Nouveauté (On retrie la liste)
+        solutions.sort(key=lambda x: x['novelty'], reverse=True)
+        best_nov = solutions[0]
+        print(f"\n[Solution B : Max Nouveauté]")
+        print(f"   Accuracy : {best_nov['accuracy']:.2f}")
+        print(f"   Novelty  : {best_nov['novelty']:.2f}")
+        print(f"   Diversity: {best_nov['diversity']:.4f}")
+        print(f"   Films: {[titles.get(i, i) for i in best_nov['items'][:3]]} ...")
+
+    # ---------------------------------------------------------
+    # ÉTAPE 6 : Graphique
     # ---------------------------------------------------------
     print("\n[PHASE 3] Génération du graphique...")
-    
-    # Appel de la fonction qui est maintenant dans utils.py
     plot_pareto_front(solutions, target_user, save_path="pareto_front_user1.png")
     
     print("\n=== FIN DU PROGRAMME ===")
-    print("Vérifiez le fichier 'pareto_front_user1.png' dans votre dossier.")
 
 if __name__ == "__main__":
     main()
