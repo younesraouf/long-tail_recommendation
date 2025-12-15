@@ -1,80 +1,82 @@
+import time
 from src.data_loader import DataLoader
 from src.cf_model import ItemBasedCF
 from src.optimizer import MORSOptimizer
-from src.utils import plot_pareto_front
+from src.utils import plot_pareto_front  # On importe votre nouvelle fonction
 
 def main():
-    print("=== MORS Project: Multi-Objective Recommendation System ===")
-    
-    # --- PHASE 1: Chargement des données ---
-    print("\n[PHASE 1] Loading Data")
-    loader = DataLoader('data/raw/ml-100k')
-    df = loader.load_ratings()
-    
-    if df is None: return
+    print("==================================================")
+    print("      PROJET MORS : Long Tail Recommendation      ")
+    print("==================================================")
 
-    # On garde le split pour la bonne forme, mais on entraîne sur le Train Set
-    train_df, _ = loader.get_train_test_split(df)
-    train_matrix = loader.get_user_item_matrix(train_df)
-    item_stats = loader.get_item_statistics(train_df)
+    # ---------------------------------------------------------
+    # ÉTAPE 1 : Chargement et Préparation des Données
+    # ---------------------------------------------------------
+    # On initialise le loader (par défaut sur MovieLens)
+    loader = DataLoader(processed_data_dir="data/processed", active_dataset='movielens')
     
-    # --- PHASE 2: Filtrage Collaboratif (Génération du Pool) ---
-    print("\n[PHASE 2] Generating Candidate Pool (CF)")
+    # Affichage du tableau récapitulatif (Table 2 de l'article)
+    loader.display_table_2_summary()
+    
+    # Chargement des données réelles
+    df = loader.load_active_dataset()
+    titles = loader.load_item_titles() # Pour l'affichage des titres (optionnel)
+    
+    # Split Train/Test (80/20)
+    train_df, _ = loader.get_train_test_split(df)
+    
+    # Calcul des stats (Moyenne/Variance) nécessaire pour le calcul de Nouveauté
+    item_stats = loader.get_item_statistics(train_df)
+
+    # ---------------------------------------------------------
+    # ÉTAPE 2 : Filtrage Collaboratif (Phase 1)
+    # ---------------------------------------------------------
+    print("\n[PHASE 1] Entraînement du modèle CF (Item-Based)...")
+    train_matrix = loader.get_user_item_matrix(train_df)
+    
     cf = ItemBasedCF(train_matrix)
     cf.compute_similarity()
     
-    USER_ID = 1
+    # Choix de l'utilisateur cible (ex: User 1)
+    target_user = 1
+    print(f"\n[PHASE 1] Génération du pool de candidats pour User {target_user}...")
     
-    # Stratégie "Injection de Chaos" pour garantir la diversité
-    # On prend 800 films, on garde les 150 meilleurs + 150 de la "Long Tail"
-    large_pool = cf.get_top_k_candidates(user_id=USER_ID, k=800)
-    
-    safe_candidates = large_pool[:150]    # Les "Best-Sellers"
-    risky_candidates = large_pool[-150:]  # La "Long Tail"
-    
-    candidates = safe_candidates + risky_candidates
-    print(f"\n[INFO] Optimization Pool ready: {len(candidates)} items (Mixed Strategy).")
+    # On génère 100 candidats potentiels. L'optimiseur devra en choisir 10 parmi eux.
+    candidates = cf.get_top_k_candidates(target_user, k=100)
 
-    # --- PHASE 3 & 4: Optimisation MORS (Algorithme Génétique) ---
-    print("\n[PHASE 3] Running Evolutionary Algorithm (MORS)...")
+    # ---------------------------------------------------------
+    # ÉTAPE 3 : Optimisation Multi-Objectif (Phase 2)
+    # ---------------------------------------------------------
+    print(f"\n[PHASE 2] Démarrage de l'Optimiseur Évolutionnaire (MORS)...")
     
+    # Initialisation de l'optimiseur
+    # list_length=10 : On veut recommander 10 films à la fin
+    # population_size=50 : On fait évoluer 50 listes en parallèle
     optimizer = MORSOptimizer(
         candidates=candidates, 
         item_stats=item_stats, 
         list_length=10, 
-        population_size=50,
-        mutation_rate=0.3
+        population_size=50
     )
     
-    pareto_solutions = optimizer.run(generations=50)
-    print(f"\n[Done] Found {len(pareto_solutions)} Pareto-optimal solutions.")
+    start_time = time.time()
+    # On lance l'évolution sur 100 générations
+    solutions = optimizer.run(generations=100)
+    elapsed = time.time() - start_time
     
-    # --- PHASE 5: Visualisation & Résultats ---
-    print("\n[PHASE 5] Results & Visualization")
-    
-    # 1. Sauvegarder le graphique (C'est la preuve scientifique du papier)
-    plot_pareto_front(pareto_solutions, USER_ID)
-    
-    # 2. Afficher les titres pour l'analyse humaine
-    titles_map = loader.load_movie_titles()
-    
-    def display_solution(sol, label):
-        print(f"\n👉 {label}")
-        print(f"   Optimization Score -> Accuracy (F1): {sol['accuracy']:.2f} | Novelty (F2): {sol['novelty']:.4f}")
-        print(f"   Recommended Movies:")
-        for item_id in sol['items']:
-            title = titles_map.get(item_id, "Unknown Title")
-            # On affiche l'ID pour vérifier si c'est un film rare
-            print(f"     - [{item_id}] {title}")
+    print(f"Optimisation terminée en {elapsed:.2f}s.")
+    print(f"Nombre de solutions Pareto-Optimales trouvées : {len(solutions)}")
 
-    # Afficher les deux extrêmes du Front de Pareto
-    best_acc = max(pareto_solutions, key=lambda x: x['accuracy'])
-    display_solution(best_acc, "Solution: MAX ACCURACY (Conservative)")
+    # ---------------------------------------------------------
+    # ÉTAPE 4 : Visualisation (Phase 3)
+    # ---------------------------------------------------------
+    print("\n[PHASE 3] Génération du graphique...")
     
-    best_nov = max(pareto_solutions, key=lambda x: x['novelty'])
-    display_solution(best_nov, "Solution: MAX NOVELTY (Discovery / Long Tail)")
-
-    print("\n✅ Project execution complete. Check 'pareto_front.png'.")
+    # Appel de la fonction qui est maintenant dans utils.py
+    plot_pareto_front(solutions, target_user, save_path="pareto_front_user1.png")
+    
+    print("\n=== FIN DU PROGRAMME ===")
+    print("Vérifiez le fichier 'pareto_front_user1.png' dans votre dossier.")
 
 if __name__ == "__main__":
     main()
