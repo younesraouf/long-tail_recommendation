@@ -6,7 +6,6 @@ Implémentation de l'approche **Multi-Objective Optimization for Long Tail Recom
 ## Structure
 - `src/`: Code source du projet.
 - `data/`: Datasets (MovieLens).
-- `notebooks/`: Analyses exploratoires.
 
 ## Installation
 ```bash
