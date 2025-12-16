@@ -6,4 +6,5 @@ matplotlib
 scipy
 jupyter
 xlrd
+streamlit
 pymoo  # Bibliothèque recommandée pour l'optimisation multi-objectifs
