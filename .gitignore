@@ -1,4 +1,3 @@
-STDIN
 # Python
 __pycache__/
 *.pyc
@@ -17,6 +16,12 @@ data/raw/
 *.zip
 *.csv
 *.pkl
+
+# --- MODIFICATION ICI ---
+# Le '!' signifie "ne pas ignorer" (exception)
+!data/processed/
+!data/processed/*.csv
+# ------------------------
 
 # OS specific
 .DS_Store
