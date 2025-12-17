@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import time
 
 # --- IMPORTS DES MODULES DU PROJET ---
-# On suppose que le dossier 'src' est au même niveau que app.py
 from src.data_loader import DataLoader
 from src.cf_model import ItemBasedCF
 from src.optimizer import MORSOptimizer
@@ -28,14 +27,12 @@ Ce dashboard permet de visualiser le compromis entre la **Précision** (Items po
 def load_system(dataset_name):
     """
     Charge les données, entraîne le modèle CF et prépare les stats.
-    Mis en cache pour la performance.
     """
     status_text = st.empty()
     bar = st.progress(0)
     
     # 1. Chargement Données
     status_text.text(f"Chargement du dataset {dataset_name}...")
-    # CORRECTION DU CHEMIN ICI : On force le chemin relatif depuis la racine
     loader = DataLoader(active_dataset=dataset_name, processed_data_dir="data/processed")
     df = loader.load_active_dataset()
     titles = loader.load_item_titles()
@@ -60,18 +57,13 @@ def load_system(dataset_name):
     return loader, df, item_stats, cf, titles
 
 def split_pareto_solutions(solutions):
-    """
-    Sépare les solutions en deux listes : 
-    1. Le Front de Pareto (Non-dominées)
-    2. Les solutions dominées (Le nuage gris)
-    """
+    """Sépare les solutions en Front de Pareto et Solutions Dominées."""
     pareto = []
     dominated = []
     
     for sol_a in solutions:
         is_dominated = False
         for sol_b in solutions:
-            # Si sol_b est meilleure ou égale partout, et strictement meilleure sur au moins un point
             if (sol_b['accuracy'] >= sol_a['accuracy'] and 
                 sol_b['novelty'] >= sol_a['novelty'] and 
                 (sol_b['accuracy'] > sol_a['accuracy'] or sol_b['novelty'] > sol_a['novelty'])):
@@ -83,7 +75,6 @@ def split_pareto_solutions(solutions):
         else:
             pareto.append(sol_a)
             
-    # Tri du front pour tracer une ligne propre
     pareto.sort(key=lambda x: x['accuracy'])
     return pareto, dominated
 
@@ -97,21 +88,18 @@ def plot_pareto_advanced(pareto_sols, dominated_sols):
     
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    # 1. Nuage gris (Solutions explorées mais rejetées)
+    # 1. Nuage gris
     ax.scatter(dom_acc, dom_nov, c='gray', alpha=0.3, s=30, label='Solutions explorées', zorder=1)
     
     # 2. Ligne du Front
     ax.plot(par_acc, par_nov, c='#1f77b4', linewidth=2, alpha=0.8, zorder=2)
     
-    # 3. Points du Front (Optimaux)
+    # 3. Points du Front
     ax.scatter(par_acc, par_nov, c='#1f77b4', s=60, edgecolors='white', label='Front de Pareto', zorder=3)
     
-    # 4. Extrêmes (Étoiles)
+    # 4. Extrêmes
     if len(pareto_sols) > 0:
-        # Max Précision (Dernier de la liste triée par accuracy)
         ax.scatter(par_acc[-1], par_nov[-1], c='crimson', s=180, marker='*', label='Max Précision', zorder=4)
-        
-        # Max Nouveauté (Celui qui a le score novelty le plus haut)
         idx_max_nov = max(range(len(par_nov)), key=par_nov.__getitem__)
         ax.scatter(par_acc[idx_max_nov], par_nov[idx_max_nov], c='limegreen', s=180, marker='*', label='Max Nouveauté', zorder=4)
 
@@ -123,21 +111,53 @@ def plot_pareto_advanced(pareto_sols, dominated_sols):
     
     return fig
 
-def show_list_with_highlight(sol, label, titles_map, highlight_items=None):
-    """Affiche une liste de films en ajoutant des émojis pour les nouveautés."""
+def show_list_with_highlight(sol, label, titles_map, item_stats, highlight_items=None):
+    """
+    Affiche une liste de films avec titres, nombre de ratings et score de diversité.
+    (Modifié : Suppression des émojis)
+    """
+    # Note: highlight_items est gardé en paramètre pour compatibilité mais non utilisé visuellement ici
     if highlight_items is None: highlight_items = set()
     
-    data = []
+    titles_list = []
+    ratings_count_list = []
+
     for item_id in sol['items']:
+        # 1. Gestion du Titre (SANS EMOJI)
         title = titles_map.get(item_id, f"Item {item_id}")
-        if item_id in highlight_items:
-            title = f"✨ {title}" # Marqueur visuel
-        data.append(title)
+        titles_list.append(title)
         
-    df_res = pd.DataFrame({"Films Recommandés": data})
+        # 2. Gestion de la Popularité
+        try:
+            count = int(item_stats.loc[item_id]['popularity'])
+        except (KeyError, ValueError):
+            count = 0
+        ratings_count_list.append(count)
+        
+    df_res = pd.DataFrame({
+        "Films Recommandés": titles_list,
+        "Nb Ratings": ratings_count_list
+    })
+    
+    # Récupération de la Diversité
+    div_score = sol.get('diversity', 0.0)
+    
     st.markdown(f"**{label}**")
-    st.caption(f"Précision: {sol['accuracy']:.2f} | Nouveauté: {sol['novelty']:.2f}")
-    st.dataframe(df_res, height=300, use_container_width=True)
+    st.caption(f"Précision: {sol['accuracy']:.2f} | Nouveauté: {sol['novelty']:.2f} | Diversité: {div_score:.4f}")
+    
+    st.dataframe(
+        df_res, 
+        height=300, 
+        use_container_width=True,
+        column_config={
+            "Films Recommandés": st.column_config.TextColumn("Titre du Film"),
+            "Nb Ratings": st.column_config.NumberColumn(
+                "Popularité",
+                help="Nombre de fois que ce film a été noté",
+                format="%d ⭐"
+            )
+        }
+    )
 
 # --- INTERFACE SIDEBAR ---
 st.sidebar.header("⚙️ Configuration")
@@ -147,7 +167,7 @@ user_id = st.sidebar.number_input("ID Utilisateur Cible", min_value=1, value=1)
 
 st.sidebar.subheader("Paramètres Algorithme (MORS)")
 k_items = st.sidebar.slider("Longueur de la liste (K)", 5, 20, 10)
-n_gen = st.sidebar.slider("Générations", 10, 300, 100) # Augmenté un peu par défaut
+n_gen = st.sidebar.slider("Générations", 10, 300, 100)
 pop_size = st.sidebar.slider("Taille Population", 10, 100, 50)
 
 # --- CORPS PRINCIPAL ---
@@ -206,7 +226,11 @@ with tab2:
                 )
                 solutions = optimizer.run(generations=n_gen)
             
-            # C. Traitement des résultats (Séparation Front vs Nuage)
+            # Calcul de la Diversité (fait à la fin pour affichage)
+            for sol in solutions:
+                sol['diversity'] = cf.calculate_list_diversity(sol['items'])
+
+            # C. Traitement des résultats
             pareto_sols, dominated_sols = split_pareto_solutions(solutions)
             
             st.divider()
@@ -216,19 +240,16 @@ with tab2:
                 st.subheader("Visualisation des Solutions")
                 fig_pareto = plot_pareto_advanced(pareto_sols, dominated_sols)
                 st.pyplot(fig_pareto)
-                
                 st.info(f"Solutions générées : {len(solutions)} | Optimales (Pareto) : {len(pareto_sols)}")
             
             with col_list:
                 st.subheader("Comparaison des Listes")
                 
                 # Sélection des meilleures solutions
-                # Le front est trié par accuracy croissante -> Le dernier est Max Acc
                 sol_acc = pareto_sols[-1]
-                # Le max novelty peut être n'importe où, on le cherche
                 sol_nov = max(pareto_sols, key=lambda x: x['novelty'])
                 
-                # Identification des items "Découverte" (présents dans Nov mais pas dans Acc)
+                # Identification des items "Découverte"
                 items_in_acc = set(sol_acc['items'])
                 items_in_nov = set(sol_nov['items'])
                 discoveries = items_in_nov - items_in_acc
@@ -236,13 +257,13 @@ with tab2:
                 sub_tab1, sub_tab2 = st.tabs(["🎯 Max Précision", "🌟 Max Nouveauté"])
                 
                 with sub_tab1:
-                    show_list_with_highlight(sol_acc, "Focus : Qualité Prédite", titles)
+                    show_list_with_highlight(sol_acc, "Focus : Qualité Prédite", titles, item_stats)
                 
                 with sub_tab2:
-                    show_list_with_highlight(sol_nov, "Focus : Découverte (Long Tail)", titles, highlight_items=discoveries)
-                    if len(discoveries) > 0:
-                        st.success(f"L'algo a introduit {len(discoveries)} items originaux (marqués par ✨).")
-                    else:
+                    show_list_with_highlight(sol_nov, "Focus : Découverte (Long Tail)", titles, item_stats, highlight_items=discoveries)
+                    
+                    # Message de suppression: Le bloc st.success a été retiré ici
+                    if len(discoveries) == 0:
                         st.warning("Les listes sont identiques (Compromis difficile à trouver pour cet utilisateur).")
                     
         elif user_id in cf.train_matrix.index:
