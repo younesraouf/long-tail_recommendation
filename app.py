@@ -9,6 +9,7 @@ import re
 from src.data_loader import DataLoader
 from src.cf_model import ItemBasedCF
 from src.optimizer import MORSOptimizer
+from src.metrics import PaperMetrics  # Module d'évaluation scientifique
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(
@@ -27,7 +28,7 @@ Explorez le compromis entre la **Précision** (Mainstream) et la **Nouveauté** 
 
 @st.cache_resource
 def load_system(dataset_name):
-    """Charge les données et le modèle."""
+    """Charge les données, le modèle ET le set de test pour l'évaluation."""
     status_text = st.empty()
     bar = st.progress(0)
     
@@ -38,13 +39,13 @@ def load_system(dataset_name):
     titles = loader.load_item_titles()
     bar.progress(25)
     
-    # 2. Stats
-    status_text.text("Calcul des statistiques...")
-    train_df, _ = loader.get_train_test_split(df)
+    # 2. Stats & Split (Train/Test)
+    status_text.text("Calcul des statistiques et Probe Set...")
+    train_df, test_df = loader.get_train_test_split(df)
     item_stats = loader.get_item_statistics(train_df)
     bar.progress(50)
     
-    # 3. Modèle CF
+    # 3. Modèle CF (sur Train uniquement)
     status_text.text("Entraînement du Filtrage Collaboratif...")
     train_matrix = loader.get_user_item_matrix(train_df)
     cf = ItemBasedCF(train_matrix)
@@ -53,7 +54,7 @@ def load_system(dataset_name):
     
     status_text.empty()
     bar.empty()
-    return loader, df, item_stats, cf, titles
+    return loader, df, item_stats, cf, titles, test_df
 
 def split_pareto_solutions(solutions):
     """Sépare le front de Pareto des solutions dominées."""
@@ -73,13 +74,13 @@ def split_pareto_solutions(solutions):
     return pareto, dominated
 
 def plot_pareto_advanced(pareto_sols, dominated_sols, selected_idx=None):
-    """Trace le graphique Accuracy vs Novelty."""
+    """Trace le graphique Accuracy vs Novelty (Objectifs d'Optimisation)."""
     par_acc = [s['accuracy'] for s in pareto_sols]
     par_nov = [s['novelty'] for s in pareto_sols]
     dom_acc = [s['accuracy'] for s in dominated_sols]
     dom_nov = [s['novelty'] for s in dominated_sols]
     
-    fig, ax = plt.subplots(figsize=(8, 5)) # Taille ajustée pour le layout côte à côte
+    fig, ax = plt.subplots(figsize=(8, 5))
     
     # Nuage gris
     ax.scatter(dom_acc, dom_nov, c='gray', alpha=0.3, s=30, label='Solutions explorées', zorder=1)
@@ -99,29 +100,23 @@ def plot_pareto_advanced(pareto_sols, dominated_sols, selected_idx=None):
         idx_max_nov = max(range(len(par_nov)), key=par_nov.__getitem__)
         ax.scatter(par_acc[idx_max_nov], par_nov[idx_max_nov], c='limegreen', s=180, marker='*', label='Max Nouveauté', zorder=4)
 
-    ax.set_title("1. Position sur le Front de Pareto")
-    ax.set_xlabel("Précision Globale")
-    ax.set_ylabel("Nouveauté Globale")
+    ax.set_title("1. Optimisation (F1 vs F2)")
+    ax.set_xlabel("Somme des Notes Prédites (F1)")
+    ax.set_ylabel("Score Nouveauté MORS (F2)")
     ax.grid(True, linestyle=':', alpha=0.5)
     ax.legend(loc='lower left', fontsize='small')
     return fig
 
-# --- FONCTION D'AFFICHAGE (Moyenne + Variance) ---
 def show_list_with_highlight(sol, titles_map, item_stats):
-    """
-    Affiche la liste des films avec Popularité, Moyenne et Variance.
-    """
+    """Affiche la liste des films avec Popularité, Moyenne et Variance."""
     titles_list = []
     ratings_count_list = []
     mu_list = []
     sigma_list = []
 
     for item_id in sol['items']:
-        # Titre
         title = titles_map.get(item_id, f"Item {item_id}")
         titles_list.append(title)
-        
-        # Stats
         try:
             stats = item_stats.loc[item_id]
             count = int(stats['popularity'])
@@ -143,23 +138,19 @@ def show_list_with_highlight(sol, titles_map, item_stats):
         "Variance (σ)": sigma_list
     })
     
-    # Affichage avec configuration des colonnes pour faire joli
     st.dataframe(
         df_res, 
         use_container_width=True,
         column_config={
             "Films Recommandés": st.column_config.TextColumn("Titre du Film"),
-            "Popularité": st.column_config.NumberColumn("Nb Votes", format="%d ⭐"),
+            "Popularité": st.column_config.NumberColumn("Nb Votes (di)", format="%d ⭐"),
             "Moyenne (μ)": st.column_config.NumberColumn("Moyenne", format="%.2f"),
             "Variance (σ)": st.column_config.NumberColumn("Variance", format="%.2f"),
         }
     )
 
-# --- GRAPHIQUE CARTOGRAPHIE ---
 def plot_item_positioning(item_list, item_stats, titles_map, pred_map):
-    """
-    Scatter Plot: X = Score de Nouveauté, Y = Note Prédite
-    """
+    """Scatter Plot: X = Score de Nouveauté, Y = Note Prédite"""
     data = []
     for item_id in item_list:
         try:
@@ -181,9 +172,8 @@ def plot_item_positioning(item_list, item_stats, titles_map, pred_map):
     
     df_chart = pd.DataFrame(data)
     
-    fig, ax = plt.subplots(figsize=(8, 5)) # Taille ajustée
+    fig, ax = plt.subplots(figsize=(8, 5))
     
-    # Nuage de points
     scatter = ax.scatter(
         df_chart['Novelty'], 
         df_chart['Predicted'], 
@@ -194,19 +184,16 @@ def plot_item_positioning(item_list, item_stats, titles_map, pred_map):
         alpha=0.9
     )
     
-    # Annotations
     for i, row in df_chart.iterrows():
         short_title = (row['Titre'][:12] + '..') if len(row['Titre']) > 12 else row['Titre']
         ax.annotate(short_title, (row['Novelty'], row['Predicted']), 
                    xytext=(0, 8), textcoords='offset points', ha='center', fontsize=8, weight='bold')
     
-    # Lignes médianes
     med_x = df_chart['Novelty'].median()
     med_y = df_chart['Predicted'].median()
     ax.axvline(x=med_x, color='gray', linestyle=':', alpha=0.5)
     ax.axhline(y=med_y, color='gray', linestyle=':', alpha=0.5)
     
-    # Labels Quadrants
     ax.text(df_chart['Novelty'].max(), df_chart['Predicted'].max() + 0.1, "💎 PÉPITES", 
             color='purple', ha='right', weight='bold')
     ax.text(df_chart['Novelty'].min(), df_chart['Predicted'].max() + 0.1, "✅ VALEURS SÛRES", 
@@ -249,7 +236,7 @@ with st.sidebar:
 
 # 1. Chargement
 try:
-    loader, df, item_stats, cf, titles = load_system(ds_choice)
+    loader, df, item_stats, cf, titles, test_df = load_system(ds_choice)
     st.success(f"Système chargé : {ds_choice.capitalize()} ({len(df)} notes).")
 except Exception as e:
     st.error(f"Erreur de chargement : {e}")
@@ -318,7 +305,7 @@ with tab2:
                 )
                 solutions = optimizer.run(generations=n_gen)
             
-            # Calcul diversité
+            # Calcul diversité (interne)
             for sol in solutions:
                 sol['diversity'] = cf.calculate_list_diversity(sol['items'])
 
@@ -353,7 +340,7 @@ with tab2:
             with sub_tab1: show_list_with_highlight(sol_acc, titles, item_stats)
             with sub_tab2: show_list_with_highlight(sol_nov, titles, item_stats)
 
-# --- TAB 3 : EXPLORATEUR (Mise en page Structurée) ---
+# --- TAB 3 : EXPLORATEUR ---
 with tab3:
     if not st.session_state.has_run:
         st.info("👋 Veuillez d'abord lancer l'optimisation dans l'onglet 'Lancer MORS'.")
@@ -365,7 +352,7 @@ with tab3:
         if len(pareto_sols) == 0:
             st.warning("Aucune solution optimale disponible.")
         else:
-            # EN-TÊTE : Contrôles et KPIs
+            # EN-TÊTE : Contrôles
             st.markdown("### 🔍 Explorateur Interactif")
             
             nb_sols = len(pareto_sols)
@@ -378,32 +365,64 @@ with tab3:
             
             selected_sol = pareto_sols[selected_idx]
             
+            # --- KPIS SCIENTIFIQUES PROPRES ---
             with col_kpi:
-                st.markdown("**Performances :**")
+                st.markdown("**Évaluation Scientifique (Section 4.4)**")
+                
+                # 1. Calcul des métriques strictes
+                prec_paper = PaperMetrics.calculate_precision_eq12(
+                    selected_sol['items'], 
+                    user_id, 
+                    test_df, 
+                    rating_threshold=4.0
+                )
+                
+                nov_paper = PaperMetrics.calculate_novelty_eq13(
+                    selected_sol['items'], item_stats
+                )
+
+                # 2. Récupération de la diversité (déjà calculée dans Tab 2)
+                div_val = selected_sol.get('diversity', 0.0)
+                
+                # 3. Affichage sur 3 colonnes propres
                 k1, k2, k3 = st.columns(3)
-                k1.metric("Précision", f"{selected_sol['accuracy']:.1f}")
-                k2.metric("Nouveauté", f"{selected_sol['novelty']:.1f}")
-                div = selected_sol.get('diversity', 0)
-                k3.metric("Diversité", f"{div:.3f}")
+                
+                k1.metric(
+                    label="Précision",  # Titre simplifié
+                    value=f"{prec_paper:.2%}",
+                    help="Items pertinents retrouvés dans le Probe Set (>= 4 étoiles)."
+                )
+                
+                k2.metric(
+                    label="Mean Degree (Novelty)", # Titre simplifié
+                    value=f"{int(nov_paper)}",
+                    # Plus de delta ici (affichage neutre)
+                    help="Popularité moyenne. Une valeur BASSE indique une meilleure Nouveauté."
+                )
+
+                k3.metric(
+                    label="Diversité",
+                    value=f"{div_val:.3f}",
+                    help="Diversité intra-liste (1 - similarité moyenne)."
+                )
+            # -------------------------------------------------------------
 
             st.divider()
 
-            # LIGNE 1 : Les deux Graphiques côte à côte
+            # LIGNE 1 : Graphiques
             c1, c2 = st.columns(2)
             
             with c1:
-                # Graphique 1: Pareto
                 fig_pareto = plot_pareto_advanced(pareto_sols, dominated_sols, selected_idx=selected_idx)
                 st.pyplot(fig_pareto)
 
             with c2:
-                # Graphique 2: Cartographie
                 fig_analysis = plot_item_positioning(selected_sol['items'], item_stats, titles, pred_map)
                 if fig_analysis:
                     st.pyplot(fig_analysis)
             
             st.divider()
 
-            # LIGNE 2 : Le Tableau détaillé (Pleine largeur)
+            # LIGNE 2 : Tableau
             st.markdown(f"#### 3. Détails de la Solution #{selected_idx}")
             show_list_with_highlight(selected_sol, titles, item_stats)
