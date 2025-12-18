@@ -6,32 +6,38 @@ from scipy.spatial.distance import cdist
 
 class MORSOptimizer:
     """
-    Implémentation MOEA/D stricte.
-    Retourne exactement 'population_size' solutions (Mélange Optimales/Dominées).
+    Implémentation MOEA/D alignée sur le Tableau 1 de l'article.
     """
 
     def __init__(self, candidates: List[Tuple[int, float]], item_stats: pd.DataFrame, 
-                 list_length: int = 10, population_size: int = 100, mutation_rate: float = 0.2, 
-                 neighbor_size: int = 10):
+                 list_length: int = 10, population_size: int = 100, 
+                 mutation_rate: float = 0.1,      # pm (Table 1)
+                 crossover_rate: float = 0.9,     # pc (Table 1)
+                 neighbor_size: int = 10,         # ns (Table 1)
+                 update_size: int = 3):           # us (Table 1)
         
         self.candidates = candidates
         self.candidate_map = {item: score for item, score in candidates}
         self.item_stats = item_stats
         self.list_length = list_length
-        self.pop_size = population_size  # Cible : 100
-        self.mutation_rate = mutation_rate
+        self.pop_size = population_size
+        
+        # Paramètres avancés de l'article
+        self.pm = mutation_rate
+        self.pc = crossover_rate
         self.T = neighbor_size 
-        self.nr = 2 # Max replacement per child
+        self.nr = update_size 
         
         self.population = [] 
         self.weights = []
         self.neighborhoods = []
         self.z_ideal = [0.0, 0.0]
-        
-        # "Cimetière" pour stocker les solutions dominées (pour les points gris)
         self.graveyard = []
 
-    # --- 1. FONCTIONS DE BASE ---
+    # ... (Les méthodes evaluate, init_weights, init_neighborhoods, update_ideal_point 
+    #      restent identiques au code précédent, je ne les répète pas pour abréger, 
+    #      gardez celles que vous avez déjà) ...
+
     def _calculate_novelty_score(self, item_id: int) -> float:
         if item_id not in self.item_stats.index: return 0.0
         stats = self.item_stats.loc[item_id]
@@ -44,11 +50,10 @@ class MORSOptimizer:
         novelty = sum([self._calculate_novelty_score(item) for item in individual])
         return [accuracy, novelty]
 
-    # --- 2. INITIALISATION ---
     def init_weights(self):
         self.weights = []
         for i in range(self.pop_size):
-            w1 = i / (self.pop_size - 1)
+            w1 = i / (self.pop_size - 1) if self.pop_size > 1 else 1.0
             w2 = 1.0 - w1
             if w1 == 0: w1 = 0.0001
             if w2 == 0: w2 = 0.0001
@@ -86,7 +91,6 @@ class MORSOptimizer:
             f = self.evaluate(ind)
             self.update_ideal_point(f)
 
-    # --- 3. MOEA/D CORE (Tchebycheff) ---
     def tchebycheff_score(self, f_values, weight_idx):
         lambda_vec = self.weights[weight_idx]
         diff_acc = abs(self.z_ideal[0] - f_values[0])
@@ -115,7 +119,8 @@ class MORSOptimizer:
         return clean_ind
 
     def mutation(self, individual: List[int]) -> List[int]:
-        if random.random() < self.mutation_rate:
+        # Utilisation de self.pm (Probability of Mutation)
+        if random.random() < self.pm:
             idx = random.randint(0, self.list_length - 1)
             candidate_ids = [c[0] for c in self.candidates]
             new_gene = random.choice(candidate_ids)
@@ -125,59 +130,49 @@ class MORSOptimizer:
         return individual
 
     def run(self, generations: int = 50) -> List[Dict]:
-        """
-        Exécution MOEA/D.
-        """
         self.initialize_population()
         if not self.population: return []
         
         for gen in range(generations):
             for i in range(self.pop_size):
-                # 1. Sélection (Voisinage)
                 neighbors_indices = self.neighborhoods[i]
                 idx_p1 = np.random.choice(neighbors_indices)
                 idx_p2 = np.random.choice(neighbors_indices)
                 parent1 = self.population[idx_p1]
                 parent2 = self.population[idx_p2]
                 
-                # 2. Reproduction
-                child = self.crossover(parent1, parent2)
+                # --- Modification : Application de pc (Probability Crossover) ---
+                if random.random() < self.pc:
+                    child = self.crossover(parent1, parent2)
+                else:
+                    child = parent1[:] # Pas de croisement, on clone le parent
+                
                 child = self.mutation(child)
                 f_child = self.evaluate(child)
                 
-                # Mise à jour Z*
                 self.update_ideal_point(f_child)
                 
-                # 3. Remplacement (Si Fils > Voisin)
                 shuffled_neighbors = np.random.permutation(neighbors_indices)
                 replacement_count = 0
                 
                 for j in shuffled_neighbors:
+                    # --- Modification : Utilisation de self.nr (Update Size 'us') ---
                     if replacement_count >= self.nr: break
                         
                     gte_child = self.tchebycheff_score(f_child, j)
-                    
-                    # On évalue le voisin actuel
                     neighbor_sol = self.population[j]
                     f_neighbor = self.evaluate(neighbor_sol)
                     gte_neighbor = self.tchebycheff_score(f_neighbor, j)
                     
-                    # CONDITION DE REMPLACEMENT (L'enfant est mieux)
                     if gte_child <= gte_neighbor:
-                        # Avant de remplacer, on SAUVEGARDE le perdant dans le cimetière
-                        # C'est ça qui fera vos points GRIS
                         self.graveyard.append({'items': neighbor_sol, 'accuracy': f_neighbor[0], 'novelty': f_neighbor[1]})
-                        
-                        # On remplace
                         self.population[j] = child
                         replacement_count += 1
 
-        # --- CONSTITUTION DE LA LISTE FINALE (100 solutions) ---
-        
+        # Constitution de la liste finale
         final_solutions = []
         seen_hashes = set()
         
-        # 1. D'abord, on prend les survivants (Population Finale - Les Bleus potentiels)
         for ind in self.population:
             h = tuple(sorted(ind))
             if h not in seen_hashes:
@@ -185,12 +180,9 @@ class MORSOptimizer:
                 scores = self.evaluate(ind)
                 final_solutions.append({'items': ind, 'accuracy': scores[0], 'novelty': scores[1]})
         
-        # 2. Ensuite, on complète avec les perdants (Graveyard - Les Gris potentiels)
-        # On prend les perdants les plus récents (fin de liste) car ils sont proches du front
         for dead_sol in reversed(self.graveyard):
-            if len(final_solutions) >= self.pop_size: # On s'arrête à 100
+            if len(final_solutions) >= self.pop_size:
                 break
-                
             h = tuple(sorted(dead_sol['items']))
             if h not in seen_hashes:
                 seen_hashes.add(h)
